@@ -3,9 +3,10 @@ const User = require("./models/User");
 
 async function startLoginFlow(bot, chatId) {
   const browser = await puppeteer.launch({
-    headless: false, // можно true на проде
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
+  
 
   const page = await browser.newPage();
 
