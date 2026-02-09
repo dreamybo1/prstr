@@ -1,60 +1,81 @@
-const { chromium } = require('playwright') 
-const User = require('./models/User')
+const puppeteer = require("puppeteer");
+const User = require("./models/User");
 
 async function startLoginFlow(bot, chatId) {
-  const browser = await chromium.launch({ headless: false })
-  const context = await browser.newContext()
-  const page = await context.newPage()
+  const browser = await puppeteer.launch({
+    headless: false, // можно true на проде
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
 
-  await page.goto(process.env.LOGIN_URL)
+  const page = await browser.newPage();
 
-  bot.sendMessage(chatId, 'Введите номер телефона:')
+  await page.goto(process.env.LOGIN_URL, {
+    waitUntil: "networkidle2",
+  });
+
+  await bot.sendMessage(chatId, "Введите номер телефона:");
 
   const phoneHandler = async (msg) => {
-    if (msg.chat.id !== chatId) return
+    if (msg.chat.id !== chatId) return;
 
-    bot.removeListener('message', phoneHandler)
+    bot.removeListener("message", phoneHandler);
 
-    const phone = msg.text
+    const phone = msg.text;
 
-    await page.fill('input[type=tel]', phone)
-    await page.click('button')
+    try {
+      await page.type("input[type=tel]", phone, { delay: 50 });
+      await page.click("button");
 
-    await bot.sendMessage(chatId, 'Введите SMS код:')
+      await bot.sendMessage(chatId, "Введите SMS код:");
 
-    const codeHandler = async (msg2) => {
-      if (msg2.chat.id !== chatId) return
+      const codeHandler = async (msg2) => {
+        if (msg2.chat.id !== chatId) return;
 
-      bot.removeListener('message', codeHandler)
+        bot.removeListener("message", codeHandler);
 
-      const code = msg2.text
+        const code = msg2.text;
 
-      await page.fill('input[type=text]', code)
-      await page.click('button')
+        try {
+          await page.type("input[type=text]", code, { delay: 50 });
+          await page.click("button");
 
-      // Ждём конкретный признак успешной авторизации
-      await page.waitForURL('**/faq', { timeout: 60000 })
+          // Ждём успешную авторизацию
+          await page.waitForFunction(
+            () => !window.location.href.includes("login"),
+            { timeout: 60000 }
+          );
 
-      const state = await context.storageState()
+          // Получаем cookies
+          const cookies = await page.cookies();
 
-      await User.findOneAndUpdate(
-        { chatId },
-        {
-          chatId,
-          phone,
-          session: JSON.stringify(state)
-        },
-        { upsert: true, new: true }
-      )
+          await User.findOneAndUpdate(
+            { chatId },
+            {
+              chatId,
+              phone,
+              session: JSON.stringify({ cookies }),
+            },
+            { upsert: true, new: true }
+          );
 
-      await bot.sendMessage(chatId, 'Авторизация успешна ✅')
+          await bot.sendMessage(chatId, "Авторизация успешна ✅");
+        } catch (err) {
+          await bot.sendMessage(chatId, "❌ Ошибка при вводе кода");
+          console.log("Login code error:", err.message);
+        }
 
-      await browser.close()
+        await browser.close();
+      };
+
+      bot.on("message", codeHandler);
+    } catch (err) {
+      await bot.sendMessage(chatId, "❌ Ошибка при вводе телефона");
+      console.log("Login phone error:", err.message);
+      await browser.close();
     }
+  };
 
-    bot.on('message', codeHandler)
-  }
-
-  bot.on('message', phoneHandler)
+  bot.on("message", phoneHandler);
 }
-module.exports = { startLoginFlow }
+
+module.exports = { startLoginFlow };

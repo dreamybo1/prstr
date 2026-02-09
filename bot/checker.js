@@ -1,4 +1,4 @@
-const { chromium } = require("playwright");
+const puppeteer = require("puppeteer");
 const Order = require("./models/Order");
 const User = require("./models/User");
 
@@ -42,7 +42,10 @@ function startChecker(bot) {
         return scheduleNext();
       }
 
-      const browser = await chromium.launch({ headless: true });
+      const browser = await puppeteer.launch({
+        headless: "new",
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
 
       for (const order of orders) {
         const user = await User.findOne({ chatId: order.chatId });
@@ -55,17 +58,20 @@ function startChecker(bot) {
           continue;
         }
 
-        const context = await browser.newContext({
-          storageState: JSON.parse(user.session),
-          userAgent: getRandomUserAgent(),
-          viewport: getRandomViewport(),
-        });
+        const page = await browser.newPage();
 
-        const page = await context.newPage();
+        await page.setUserAgent(getRandomUserAgent());
+        await page.setViewport(getRandomViewport());
+
+        // восстановление cookies
+        const sessionData = JSON.parse(user.session);
+        if (sessionData.cookies) {
+          await page.setCookie(...sessionData.cookies);
+        }
 
         try {
           await page.goto(`${process.env.ORDER_BASE_URL}/${order.orderId}`, {
-            waitUntil: "networkidle",
+            waitUntil: "networkidle2",
             timeout: 60000,
           });
 
@@ -74,16 +80,15 @@ function startChecker(bot) {
               order.chatId,
               "⚠️ Сессия истекла. Требуется повторный /login"
             );
-            await context.close();
+            await page.close();
             continue;
           }
 
-          // ===== Скрап данных =====
+          // ===== Скрап =====
           const orderData = await page.evaluate(() => {
             const getText = (selector) =>
               document.querySelector(selector)?.textContent?.trim() || "";
 
-            // Первая таблица
             const factDelivery = getText(
               ".red_tabs_content table:first-of-type .status_badge"
             );
@@ -103,7 +108,6 @@ function startChecker(bot) {
               ".red_tabs_content table:first-of-type tr:nth-child(2) td:nth-child(2) div"
             );
 
-            // Состав заказа
             const items = Array.from(
               document.querySelectorAll(".content_table.min tbody tr")
             ).map((tr) => {
@@ -126,9 +130,9 @@ function startChecker(bot) {
             };
           });
 
-          // ===== Сравнение с предыдущими данными =====
+          // ===== Сравнение =====
           let changed = false;
-          console.log(order, orderData);
+
           if (order.lastStatus !== orderData.orderStatus) {
             order.lastStatus = orderData.orderStatus;
             changed = true;
@@ -148,19 +152,20 @@ function startChecker(bot) {
           await order.save();
 
           const itemText = order.items
-            .map((i) => `• ${i.name} x${i.qty}`)
+            .map((i) => `• ${i.name} x${i.quantity}`)
             .join("\n");
+
           if (changed) {
             await bot.sendMessage(
               order.chatId,
-              `🔔 Статус заказа ${order.orderId} - ${itemText} обновлён:\nСтатус: ${order.lastStatus}\nФакт поставки: ${order.factDelivery}`
+              `🔔 Статус заказа ${order.orderId} обновлён:\n${itemText}\n\nСтатус: ${order.lastStatus}\nФакт поставки: ${order.factDelivery}`
             );
           }
         } catch (err) {
           console.log(`Ошибка проверки ${order.orderId}:`, err.message);
         }
 
-        await context.close();
+        await page.close();
         await new Promise((res) =>
           setTimeout(res, getRandomDelayBetweenOrders())
         );
