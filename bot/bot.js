@@ -1,4 +1,5 @@
 require("dotenv").config();
+const express = require("express");
 const TelegramBot = require("node-telegram-bot-api");
 const connectDB = require("./db");
 const { startLoginFlow } = require("./auth");
@@ -7,6 +8,20 @@ const startChecker = require("./checker");
 
 connectDB();
 
+// ===== EXPRESS SERVER FOR RENDER =====
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Telegram bot is running 🚀");
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on port ${PORT}`);
+});
+// =====================================
+
+// ===== TELEGRAM BOT =====
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 // === Пользовательские состояния ===
@@ -41,7 +56,8 @@ async function showOrders(chatId) {
       itemsText = order.items.map(i => `• ${i.name} x${i.qty}`).join("\n");
     }
 
-    const text = `📦 Заказ: ${order.orderId}\n` +
+    const text =
+      `📦 Заказ: ${order.orderId}\n` +
       `Статус: ${order.lastStatus || "неизвестно"}\n` +
       `Факт поставки: ${order.deliveryStatus || "неизвестно"}\n` +
       `Дата заключения: ${order.contractDate || "неизвестно"}\n` +
@@ -86,7 +102,8 @@ bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
-  // --- Главное меню ---
+  if (!text) return;
+
   if (text === "/start" || text === "⬅️ Назад") {
     return sendMainMenu(chatId);
   }
@@ -96,7 +113,6 @@ bot.on("message", async (msg) => {
   if (text === "❌ Удалить заказ") return showDeleteMenu(chatId);
   if (text === "🔐 Логин") return startLoginFlow(bot, chatId);
 
-  // --- Добавление нового заказа ---
   if (userStates[chatId] === "waiting_order") {
     if (text === "⬅️ Назад") {
       delete userStates[chatId];
@@ -121,7 +137,6 @@ bot.on("message", async (msg) => {
     });
   }
 
-  // --- Удаление заказа ---
   const order = await Order.findOne({ chatId, orderId: text });
   if (order) {
     await Order.deleteOne({ chatId, orderId: text });
@@ -131,12 +146,10 @@ bot.on("message", async (msg) => {
   }
 });
 
-// === Ошибки опроса ===
 bot.on("polling_error", (err) => {
   console.log("Polling error:", err.message);
 });
 
-// === Запуск чекера ===
 startChecker(bot);
 
 module.exports = bot;
